@@ -1,0 +1,5 @@
+{
+  "name": "BioMagnet Assist - Análise de Sessões",
+  "description": "Assistente especializado para terapeutas de Biomagnetismo (Par Magnético) para análise técnica de sessões e geração de resumos éticos para pacientes baseados na base de conhecimento Goiz.",
+  "requestFramePermissions": []
+}

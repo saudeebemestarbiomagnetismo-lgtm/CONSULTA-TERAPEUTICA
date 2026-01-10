@@ -1,0 +1,21 @@
+
+export const GOIZ_PAIRS = [
+  { id: 'R1', name: 'Dente / Rim', description: 'Reservatório Universal - Qualquer dente com dor/infecção.' },
+  { id: 'R2', name: 'Baço / Pulmão', description: 'Reservatório específico de Sífilis.' },
+  { id: 'R3', name: 'Pleura / Peritônio', description: 'Variação: Reservatório de Pleura ou Peritônio.' },
+  { id: 'R4', name: 'Vesícula Biliar / Vesícula Biliar', description: 'Reservatório de vírus/bactérias na vesícula.' },
+  { id: 'R5', name: 'Uretra Superior / Uretra Inferior', description: 'Reservatório de HIV, Hepatite B, Papilomavírus.' },
+  { id: 'R6', name: 'Vagina / Vagina', description: 'Reservatório de Papilomavírus e Coronavírus.' },
+  { id: 'R7', name: 'Metáfise do Fêmur / Metáfise do Fêmur', description: 'Associado a Osteoporose, Convulsão, Dermatites.' },
+  { id: 'R8', name: 'Inter Sacro / Ilíaco', description: 'Reservatório de Parasita.' },
+  { id: 'R9', name: 'Cápsula Renal / Rim', description: 'Reservatório HIV e Disfunção Renal.' },
+  { id: 'R10', name: 'Vago / Rim', description: 'Reservatório de Shigella. Regenera Sistema Nervoso.' },
+  { id: 'R11', name: 'Peritônio / Peritônio', description: 'Reservatório de Bactérias.' },
+  { id: 'R12', name: 'Subdiafragma / Subdiafragma', description: 'Reservatório de Cisticercose e Tênias.' },
+  { id: 'R13', name: 'Indicador / Indicador', description: 'Escherichia Coli e Transtornos Digestivos.' },
+  { id: 'R14', name: 'Cárdia / Temporal Direito', description: 'Reservatório e memória de enfermidades (vacinas).' },
+  { id: 'R15', name: 'Corpo Caloso / Corpo Caloso', description: 'Reservatório de Tuberculose 1 e 2.' },
+  { id: 'R16', name: 'Apêndice / Bexiga', description: 'Reservatório de Fagos (vírus de bactérias).' },
+  { id: 'R17', name: 'Nutrícia / Nutrícia', description: 'Reservatório de Bactéria.' },
+  { id: 'R18', name: 'Assoalho Pélvico / Assoalho Pélvico', description: 'Reservatório Universal.' },
+];
