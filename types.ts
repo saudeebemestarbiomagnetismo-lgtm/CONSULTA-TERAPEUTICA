@@ -1,4 +1,9 @@
 
+export interface User {
+  username: string;
+  password: string;
+}
+
 export interface BiomagneticPair {
   par: string;
   localizacao_pH_negativo: string;
@@ -12,6 +17,7 @@ export interface GoizPair {
 }
 
 export interface SessionAnalysis {
+  tipo_sessao: 'biomagnetismo' | 'emocional';
   queixa_principal_paciente: string;
   analise_profissional: string;
   pares_encontrados_analise: BiomagneticPair[];
@@ -38,4 +44,5 @@ export interface Patient {
 export interface UserInput {
   complaint: string;
   pairsList: string;
+  sessionType: 'biomagnetismo' | 'emocional';
 }
