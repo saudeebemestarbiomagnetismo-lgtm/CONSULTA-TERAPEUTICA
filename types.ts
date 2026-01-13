@@ -1,7 +1,7 @@
 
 export interface User {
-  username: string;
-  password: string;
+  id: string;
+  email: string;
 }
 
 export interface BiomagneticPair {
@@ -14,6 +14,7 @@ export interface GoizPair {
   id: string;
   name: string;
   description: string;
+  user_id?: string;
 }
 
 export interface SessionAnalysis {
@@ -27,22 +28,16 @@ export interface SessionAnalysis {
 
 export interface SavedSession extends SessionAnalysis {
   id: string;
-  patientId: string;
-  patientName: string;
-  date: number;
+  patient_id: string;
+  patientName: string; // Virtual join for UI
+  created_at: string;
 }
 
 export interface Patient {
   id: string;
   nome: string;
   whatsapp: string;
-  dataNascimento: string;
+  data_nascimento: string;
   observacoes: string;
-  createdAt: number;
-}
-
-export interface UserInput {
-  complaint: string;
-  pairsList: string;
-  sessionType: 'biomagnetismo' | 'emocional';
+  created_at: string;
 }

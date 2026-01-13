@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { SessionAnalysis, Patient, SavedSession, GoizPair } from './types';
 import { analyzeSession } from './geminiService';
+import { supabase } from './supabaseClient';
 import AnalysisResult from './components/AnalysisResult';
 import PatientManagement from './components/PatientManagement';
 import ReportManagement from './components/ReportManagement';
@@ -10,8 +11,7 @@ import Auth from './components/Auth';
 import { GOIZ_PAIRS as INITIAL_PAIRS } from './constants';
 
 const App: React.FC = () => {
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
-  const [currentUser, setCurrentUser] = useState<string | null>(null);
+  const [session, setSession] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'session' | 'patients' | 'reports' | 'goiz_base'>('session');
   const [sessionType, setSessionType] = useState<'biomagnetismo' | 'emocional'>('biomagnetismo');
   
@@ -29,107 +29,158 @@ const App: React.FC = () => {
   const [isSessionSaved, setIsSessionSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const filteredPatientsSearch = useMemo(() => {
-    if (!patientSearch || selectedPatientId) return [];
-    return patients.filter(p => 
-      p.nome.toLowerCase().includes(patientSearch.toLowerCase()) || 
-      p.whatsapp.includes(patientSearch)
-    ).slice(0, 5);
-  }, [patientSearch, patients, selectedPatientId]);
-
-  const filteredGoizPairs = useMemo(() => {
-    if (!pairSearch) return [];
-    return goizPairs.filter(p => 
-      p.name.toLowerCase().includes(pairSearch.toLowerCase())
-    ).slice(0, 8);
-  }, [pairSearch, goizPairs]);
-
   useEffect(() => {
-    const savedUser = sessionStorage.getItem('biomagnet_current_user');
-    if (savedUser) {
-      setIsLoggedIn(true);
-      setCurrentUser(savedUser);
-    }
-    const savedPatients = localStorage.getItem('biomagnet_patients');
-    const savedSessions = localStorage.getItem('biomagnet_sessions');
-    const savedGoiz = localStorage.getItem('biomagnet_goiz_base');
-    if (savedPatients) setPatients(JSON.parse(savedPatients));
-    if (savedSessions) setSessions(JSON.parse(savedSessions));
-    if (savedGoiz) {
-      setGoizPairs(JSON.parse(savedGoiz));
-    } else {
-      setGoizPairs(INITIAL_PAIRS);
-    }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  useEffect(() => { localStorage.setItem('biomagnet_patients', JSON.stringify(patients)); }, [patients]);
-  useEffect(() => { localStorage.setItem('biomagnet_sessions', JSON.stringify(sessions)); }, [sessions]);
-  useEffect(() => { localStorage.setItem('biomagnet_goiz_base', JSON.stringify(goizPairs)); }, [goizPairs]);
+  useEffect(() => {
+    if (session) {
+      fetchData();
+    }
+  }, [session]);
 
-  const handleLogin = (username: string) => {
-    setIsLoggedIn(true);
-    setCurrentUser(username);
-    sessionStorage.setItem('biomagnet_current_user', username);
+  const fetchData = async () => {
+    try {
+      // 1. Fetch Patients
+      const { data: pts } = await supabase.from('patients').select('*').order('nome');
+      if (pts) setPatients(pts);
+
+      // 2. Fetch Sessions with joined patient names
+      const { data: ses } = await supabase.from('sessions').select('*, patients(nome)').order('created_at', { ascending: false });
+      if (ses) {
+        setSessions(ses.map(s => ({
+          ...s,
+          tipo_sessao: s.tipo_sessao,
+          queixa_principal_paciente: s.queixa_principal,
+          analise_profissional: s.analise_profissional,
+          pares_encontrados_analise: s.pares_json,
+          resumo_paciente_friendly: s.resumo_paciente,
+          sugestoes_adicionais_terapeuta: s.sugestoes_terapeuta,
+          patientName: s.patients?.nome || 'Paciente Avulso'
+        })));
+      }
+
+      // 3. Fetch Custom Goiz Pairs
+      const { data: customGoiz } = await supabase.from('custom_goiz_pairs').select('*');
+      const combinedGoiz = [...INITIAL_PAIRS];
+      if (customGoiz) {
+        customGoiz.forEach(cg => {
+          if (!combinedGoiz.find(ig => ig.name === cg.name)) {
+            combinedGoiz.push({ id: cg.id, name: cg.name, description: cg.description });
+          }
+        });
+      }
+      setGoizPairs(combinedGoiz);
+    } catch (err) {
+      console.error("Erro ao buscar dados:", err);
+    }
   };
 
-  const handleLogout = () => {
-    setIsLoggedIn(false);
-    setCurrentUser(null);
-    sessionStorage.removeItem('biomagnet_current_user');
+  const handleLogin = (userId: string, email: string) => {
+    // Session state will be updated by onAuthStateChange
   };
 
-  const addPatient = (newPatient: Omit<Patient, 'id' | 'createdAt'>) => {
-    const patient: Patient = { ...newPatient, id: Math.random().toString(36).substr(2, 9), createdAt: Date.now() };
-    setPatients([patient, ...patients]);
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
   };
 
-  const deletePatient = (id: string) => {
-    if (window.confirm("Excluir paciente?")) setPatients(patients.filter(p => p.id !== id));
+  const addPatient = async (newPatient: Omit<Patient, 'id' | 'created_at'>) => {
+    const { data, error } = await supabase.from('patients').insert([{
+      user_id: session.user.id,
+      nome: newPatient.nome,
+      whatsapp: newPatient.whatsapp,
+      data_nascimento: newPatient.data_nascimento,
+      observacoes: newPatient.observacoes
+    }]).select();
+    
+    if (!error && data) fetchData();
+  };
+
+  const deletePatient = async (id: string) => {
+    if (window.confirm("Excluir paciente?")) {
+      await supabase.from('patients').delete().eq('id', id);
+      fetchData();
+    }
+  };
+
+  const addGoizPair = async (pair: Omit<GoizPair, 'id'>) => {
+    await supabase.from('custom_goiz_pairs').insert([{
+      user_id: session.user.id,
+      name: pair.name,
+      description: pair.description
+    }]);
+    fetchData();
+  };
+
+  const deleteGoizPair = async (id: string) => {
+    if (id.startsWith('R')) {
+      alert("Não é possível deletar pares da base padrão.");
+      return;
+    }
+    await supabase.from('custom_goiz_pairs').delete().eq('id', id);
+    fetchData();
   };
 
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!complaint || !pairsText) {
-      setError("Preencha a queixa e os pares/pontos.");
+      setError("Preencha a queixa e os pares.");
       return;
     }
     setIsLoading(true);
-    setError(null);
     setAnalysis(null);
     setIsSessionSaved(false);
     try {
       const result = await analyzeSession(complaint, pairsText, sessionType);
       setAnalysis(result);
     } catch (err) {
-      console.error(err);
-      setError("Erro ao processar análise.");
+      setError("Erro ao analisar com IA.");
     } finally {
       setIsLoading(false);
     }
   };
 
-  const saveCurrentSession = () => {
-    if (!analysis) return;
-    const patient = patients.find(p => p.id === selectedPatientId);
-    const newSavedSession: SavedSession = {
-      ...analysis,
-      id: Math.random().toString(36).substr(2, 9),
-      patientId: selectedPatientId || 'anonymous',
-      patientName: patient ? patient.nome : 'Paciente Avulso',
-      date: Date.now()
-    };
-    setSessions([newSavedSession, ...sessions]);
-    setIsSessionSaved(true);
+  const saveCurrentSession = async () => {
+    if (!analysis || !session) return;
+    const { error } = await supabase.from('sessions').insert([{
+      user_id: session.user.id,
+      patient_id: selectedPatientId || null,
+      tipo_sessao: analysis.tipo_sessao,
+      queixa_principal: analysis.queixa_principal_paciente,
+      analise_profissional: analysis.analise_profissional,
+      pares_json: analysis.pares_encontrados_analise,
+      resumo_paciente: analysis.resumo_paciente_friendly,
+      sugestoes_terapeuta: analysis.sugestoes_adicionais_terapeuta
+    }]);
+    
+    if (!error) {
+      setIsSessionSaved(true);
+      fetchData();
+    } else {
+      console.error(error);
+    }
   };
 
-  if (!isLoggedIn) return <Auth onLogin={handleLogin} />;
+  const filteredPatientsSearch = useMemo(() => {
+    if (!patientSearch || selectedPatientId) return [];
+    return patients.filter(p => p.nome.toLowerCase().includes(patientSearch.toLowerCase())).slice(0, 5);
+  }, [patientSearch, patients, selectedPatientId]);
 
-  const menuItems = [
-    { id: 'session', label: 'Nova Sessão', icon: 'M13 10V3L4 14h7v7l9-11h-7z' },
-    { id: 'patients', label: 'Pacientes', icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z' },
-    { id: 'reports', label: 'Relatórios', icon: 'M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
-    { id: 'goiz_base', label: 'Base Goiz', icon: 'M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253' }
-  ];
+  const filteredGoizPairs = useMemo(() => {
+    if (!pairSearch) return [];
+    return goizPairs.filter(p => p.name.toLowerCase().includes(pairSearch.toLowerCase())).slice(0, 8);
+  }, [pairSearch, goizPairs]);
+
+  if (!session) return <Auth onLogin={handleLogin} />;
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900">
@@ -138,26 +189,18 @@ const App: React.FC = () => {
           <div className="w-10 h-10 bg-purple-600 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-purple-200">B</div>
           <div>
             <h1 className="text-lg font-bold text-slate-900 leading-tight">BioMagnet</h1>
-            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Assist Profissional</p>
+            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Cloud Profissional</p>
           </div>
         </div>
         <nav className="flex-1 p-4 space-y-2">
-          {menuItems.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => { setActiveTab(item.id as any); setAnalysis(null); }}
-              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-bold transition-all ${activeTab === item.id ? 'bg-purple-600 text-white shadow-lg' : 'text-slate-500 hover:bg-purple-50 hover:text-purple-600'}`}
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={item.icon} /></svg>
-              <span>{item.label}</span>
+          {['session', 'patients', 'reports', 'goiz_base'].map((id) => (
+            <button key={id} onClick={() => { setActiveTab(id as any); setAnalysis(null); }} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-bold transition-all ${activeTab === id ? 'bg-purple-600 text-white shadow-lg' : 'text-slate-500 hover:bg-purple-50 hover:text-purple-600'}`}>
+              <span className="capitalize">{id.replace('_', ' ')}</span>
             </button>
           ))}
         </nav>
         <div className="p-4 border-t border-slate-100">
-          <button onClick={handleLogout} className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-bold text-red-500 hover:bg-red-50 transition-all">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
-            <span>Sair</span>
-          </button>
+          <button onClick={handleLogout} className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-bold text-red-500 hover:bg-red-50">Sair</button>
         </div>
       </aside>
 
@@ -167,112 +210,56 @@ const App: React.FC = () => {
             <>
               {!analysis && !isLoading && (
                 <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="text-center space-y-4">
-                    <h2 className="text-4xl font-extrabold text-slate-900">Nova Análise</h2>
-                    <p className="text-lg text-slate-500">Escolha o tipo de atendimento para gerar o relatório.</p>
+                  <div className="grid grid-cols-2 gap-4 bg-white p-2 rounded-2xl shadow-sm">
+                    <button onClick={() => setSessionType('biomagnetismo')} className={`p-4 rounded-xl border-2 transition-all ${sessionType === 'biomagnetismo' ? 'border-purple-600 bg-purple-50' : 'border-transparent'}`}>Biomagnetismo</button>
+                    <button onClick={() => setSessionType('emocional')} className={`p-4 rounded-xl border-2 transition-all ${sessionType === 'emocional' ? 'border-emerald-600 bg-emerald-50' : 'border-transparent'}`}>Emocional</button>
                   </div>
-
-                  {/* PROTOCOL SELECTOR */}
-                  <div className="grid grid-cols-2 gap-4 bg-white p-2 rounded-2xl shadow-sm border border-slate-100">
-                    <button 
-                      onClick={() => setSessionType('biomagnetismo')}
-                      className={`flex flex-col items-center justify-center p-4 rounded-xl border-2 transition-all ${sessionType === 'biomagnetismo' ? 'border-purple-600 bg-purple-50 text-purple-700' : 'border-transparent text-slate-500 hover:bg-slate-50'}`}
-                    >
-                      <svg className="w-6 h-6 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a2 2 0 00-1.96 1.414l-.722 2.52a2 2 0 00.547 2.132l.088.088a2 2 0 002.828 0l2.828-2.828a2 2 0 00.547-2.132l-.828-2.172z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 3H7a2 2 0 00-2 2v14a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2z" /></svg>
-                      <span className="text-xs font-bold uppercase">Biomagnetismo</span>
-                    </button>
-                    <button 
-                      onClick={() => setSessionType('emocional')}
-                      className={`flex flex-col items-center justify-center p-4 rounded-xl border-2 transition-all ${sessionType === 'emocional' ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-transparent text-slate-500 hover:bg-slate-50'}`}
-                    >
-                      <svg className="w-6 h-6 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>
-                      <span className="text-xs font-bold uppercase">Emocional</span>
-                    </button>
-                  </div>
-
-                  <form onSubmit={handleGenerate} className="bg-white rounded-3xl shadow-xl p-10 border border-slate-100 space-y-6">
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Vincular Paciente (Opcional)</label>
-                      <div className="relative">
-                        <input 
-                          type="text" 
-                          value={patientSearch}
-                          onChange={(e) => setPatientSearch(e.target.value)}
-                          placeholder="Pesquisar..."
-                          className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-4 focus:ring-2 focus:ring-purple-500 outline-none"
-                        />
-                        {filteredPatientsSearch.length > 0 && (
-                          <div className="absolute z-20 w-full mt-2 bg-white rounded-2xl shadow-2xl border border-slate-100 overflow-hidden">
-                            {filteredPatientsSearch.map(p => (
-                              <button key={p.id} type="button" onClick={() => { setSelectedPatientId(p.id); setPatientSearch(p.nome); }} className="w-full text-left px-4 py-4 hover:bg-purple-50 flex items-center space-x-3">
-                                <div className="w-10 h-10 bg-purple-50 text-purple-600 rounded-full flex items-center justify-center font-bold">{p.nome.charAt(0)}</div>
-                                <div><p className="text-sm font-bold text-slate-900">{p.nome}</p></div>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                  <form onSubmit={handleGenerate} className="bg-white rounded-3xl shadow-xl p-10 space-y-6">
+                    <div className="relative">
+                      <label className="text-sm font-bold text-slate-700">Paciente</label>
+                      <input type="text" value={patientSearch} onChange={(e) => setPatientSearch(e.target.value)} placeholder="Pesquisar..." className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-4" readOnly={!!selectedPatientId} />
+                      {selectedPatientId && <button type="button" onClick={() => { setSelectedPatientId(''); setPatientSearch(''); }} className="absolute right-4 top-10 text-red-500 font-bold">X</button>}
+                      {filteredPatientsSearch.length > 0 && (
+                        <div className="absolute z-20 w-full mt-2 bg-white rounded-2xl shadow-2xl border">
+                          {filteredPatientsSearch.map(p => (
+                            <button key={p.id} type="button" onClick={() => { setSelectedPatientId(p.id); setPatientSearch(p.nome); }} className="w-full text-left px-4 py-4 hover:bg-purple-50">{p.nome}</button>
+                          ))}
+                        </div>
+                      )}
                     </div>
-
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Queixa Principal</label>
-                      <input 
-                        type="text" 
-                        value={complaint}
-                        onChange={(e) => setComplaint(e.target.value)}
-                        placeholder={sessionType === 'biomagnetismo' ? "Ex: Dor de dente, Enxaqueca..." : "Ex: Insônia, Ansiedade, Luto..."}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-4 focus:ring-2 focus:ring-purple-500 outline-none"
-                      />
+                    <div>
+                      <label className="text-sm font-bold text-slate-700">Queixa</label>
+                      <input type="text" value={complaint} onChange={(e) => setComplaint(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-4" />
                     </div>
-
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Pares Biomagnéticos da Sessão</label>
-                      <textarea 
-                        rows={6}
-                        value={pairsText}
-                        onChange={(e) => setPairsText(e.target.value)}
-                        placeholder={sessionType === 'biomagnetismo' ? "Dente / Rim\nBaço / Pulmão..." : "Coração (Abandono)\nRim (Medo)..."}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-4 focus:ring-2 focus:ring-purple-500 outline-none font-mono text-sm"
-                      />
+                    <div className="space-y-4">
+                      <input type="text" value={pairSearch} onChange={(e) => setPairSearch(e.target.value)} placeholder="Pesquisar na Base Goiz..." className="w-full bg-purple-50 border border-purple-100 rounded-2xl px-4 py-2 text-sm" />
+                      {filteredGoizPairs.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {filteredGoizPairs.map(p => (
+                            <button key={p.id} type="button" onClick={() => setPairsText(prev => prev ? `${prev}\n${p.name}` : p.name)} className="bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-xs font-bold hover:bg-purple-200 transition-colors">{p.name}</button>
+                          ))}
+                        </div>
+                      )}
+                      <textarea rows={6} value={pairsText} onChange={(e) => setPairsText(e.target.value)} placeholder="Pares encontrados..." className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-4 font-mono text-sm" />
                     </div>
-
-                    <button type="submit" className={`w-full text-white font-bold py-5 rounded-2xl shadow-xl transition-all ${sessionType === 'biomagnetismo' ? 'bg-purple-600 hover:bg-purple-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}>
-                      <span>Analisar {sessionType === 'biomagnetismo' ? 'Biomagnetismo' : 'Desbloqueio Emocional'}</span>
-                    </button>
+                    <button type="submit" className={`w-full text-white font-bold py-5 rounded-2xl transition-all ${sessionType === 'biomagnetismo' ? 'bg-purple-600' : 'bg-emerald-600'}`}>Analisar Sessão</button>
                   </form>
                 </div>
               )}
-
-              {isLoading && (
-                <div className="max-w-2xl mx-auto py-32 text-center space-y-8">
-                   <div className={`w-24 h-24 border-4 rounded-full animate-spin mx-auto ${sessionType === 'biomagnetismo' ? 'border-purple-100 border-t-purple-600' : 'border-emerald-100 border-t-emerald-600'}`}></div>
-                   <h3 className="text-2xl font-bold text-slate-800">Sintonizando Campo...</h3>
-                </div>
-              )}
-
+              {isLoading && <div className="text-center py-32"><div className="w-16 h-16 border-4 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto"></div><p className="mt-4 font-bold">Consultando Inteligência...</p></div>}
               {analysis && (
-                <div className="space-y-6 animate-in fade-in duration-500">
-                  <div className="flex items-center justify-between">
-                    <button onClick={() => setAnalysis(null)} className="text-sm font-bold text-slate-400 hover:text-purple-600 flex items-center"><svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>Nova Consulta</button>
-                  </div>
+                <div className="space-y-6">
+                  <button onClick={() => setAnalysis(null)} className="font-bold text-purple-600">← Nova Consulta</button>
                   <AnalysisResult data={analysis} onSave={saveCurrentSession} isSaved={isSessionSaved} />
                 </div>
               )}
             </>
           )}
-
           {activeTab === 'patients' && <PatientManagement patients={patients} onAddPatient={addPatient} onDeletePatient={deletePatient} onLoadExamples={() => {}} />}
           {activeTab === 'reports' && <ReportManagement sessions={sessions} patients={patients} />}
-          {activeTab === 'goiz_base' && <GoizBaseManagement pairs={goizPairs} onAddPair={() => {}} onUpdatePair={() => {}} onDeletePair={() => {}} onResetBase={() => {}} />}
+          {activeTab === 'goiz_base' && <GoizBaseManagement pairs={goizPairs} onAddPair={addGoizPair} onUpdatePair={() => {}} onDeletePair={deleteGoizPair} onResetBase={() => {}} />}
         </div>
       </main>
-
-      <footer className="fixed bottom-6 right-6 z-40">
-        <div className="bg-slate-900 text-white px-4 py-2 rounded-full text-[10px] font-bold uppercase tracking-widest shadow-xl flex items-center space-x-2">
-          <span className={`w-2 h-2 rounded-full ${sessionType === 'biomagnetismo' ? 'bg-purple-500' : 'bg-emerald-500'}`}></span>
-          <span>Terapeuta: {currentUser}</span>
-        </div>
-      </footer>
     </div>
   );
 };
