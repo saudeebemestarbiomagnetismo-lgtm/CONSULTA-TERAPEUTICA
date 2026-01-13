@@ -4,6 +4,17 @@ export interface User {
   email: string;
 }
 
+export interface UserProfile {
+  id: string;
+  email: string;
+  nome_profissional: string;
+  registro_profissional: string;
+  whatsapp_comercial: string;
+  bio_assinatura: string;
+  is_authorized: boolean;
+  avatar_url?: string;
+}
+
 export interface BiomagneticPair {
   par: string;
   localizacao_pH_negativo: string;
